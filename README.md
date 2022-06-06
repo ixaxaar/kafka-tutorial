@@ -46,6 +46,47 @@ tar -xvf kafka_2.12-3.1.0.tgz
 cd kafka_2.12-3.1.0/bin
 ```
 
+Start a local cluster:
+
+```yaml
+version: "3.3"
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - 2181:2181
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    depends_on:
+      - zookeeper
+    ports:
+      - 29092:29092
+      - 9092:9092
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+```
+
+```bash
+docker-compose up
+```
+
+```bash
+BROKER=127.0.0.1
+TOPIC=test_lolololool
+GROUP=$TOPIC
+BOOTSTRAP=127.0.0.1:29092
+```
+
 ## Concepts
 
 ### Messages
@@ -64,21 +105,141 @@ Messages in Kafka are categorized into topics. The closest analogies for a topic
 
 ![topic](./assets/kdg2_0105.png)
 
+```bash
+# Create a new topic
+./bin/kafka-topics.sh --create --topic $TOPIC --partitions 1 --replication-factor 1 --bootstrap-server $BOOTSTRAP
+```
+
+```bash
+# See all topics
+./kafka-topics.sh --bootstrap-server $BOOTSTRAP --list
+```
+
 ### Producer
 
 Producers create new messages. A message will be produced to a specific topic. By default, the producer will balance messages over all partitions of a topic evenly. In some cases, the producer will direct messages to specific partitions. This is typically done using the message key and a partitioner that will generate a hash of the key and map it to a specific partition. This ensures that all messages produced with a given key will get written to the same partition. The producer could also use a custom partitioner that follows other business rules for mapping messages to partitions.
 
 ![producer](./assets/producer.png)
 
+```py
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+from kafka import KafkaProducer
+import json
+import time
+import argparse
+import uuid
+import random
+
+parser = argparse.ArgumentParser(description='Kafka producer test')
+parser.add_argument('-topic', type=str, help='Name of the topic', required=True)
+parser.add_argument('-kafka_host', type=str, help='Kafka host', required=True)
+parser.add_argument('-kafka_port', type=str, help='Kafka port', required=True)
+
+args = parser.parse_args()
+if args.topic is None or args.kafka_host is None or args.kafka_port is None:
+  parser.print_help()
+
+
+print(args)
+
+
+class KafkaSink:
+
+  def __init__(self, host, port):
+    self.producer = KafkaProducer(
+      bootstrap_servers=f'{host}:{port}',
+      value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+      compression_type='gzip')
+
+  def ingest(self, topic, data):
+    for datum in data:
+      self.producer.send(topic, datum)
+    self.producer.flush()
+
+
+k = KafkaSink(args.kafka_host, args.kafka_port)
+
+for x in range(20):
+  data = {
+    "msg_id": str(uuid.uuid4()),
+    "msg_type": "test",
+    "source": "test_script",
+  }
+  k.ingest(args.topic, [data])
+```
+
+```bash
+python3 ./test.py -topic $TOPIC -kafka_host $BROKER -kafka_port 9092
+```
+
+```bash
+# Describe a topic
+./kafka-topics.sh --bootstrap-server $BOOTSTRAP --topic $TOPIC --describe
+
+# See total messages in a topic
+./kafka-run-class.sh kafka.tools.GetOffsetShell --broker-list $BOOTSTRAP --topic $TOPIC | awk -F  ":" '{sum += $3} END {print sum}'
+```
+
 ### Consumer
 
 Consumers read messages. The consumer subscribes to one or more topics and reads the messages in the order in which they were produced to each partition. The consumer keeps track of which messages it has already consumed by keeping track of the offset of messages. The offset—an integer value that continually increases—is another piece of metadata that Kafka adds to each message as it is produced. Each message in a given partition has a unique offset, and the following message has a greater offset (though not necessarily monotonically greater). By storing the next possible offset for each partition, typically in Kafka itself, a consumer can stop and restart without losing its place.
+
+```py
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+from kafka import KafkaConsumer
+import json
+import time
+import argparse
+import uuid
+import random
+
+parser = argparse.ArgumentParser(description='Kafka consumer test')
+parser.add_argument('-topic', type=str, help='Name of the topic', required=True)
+parser.add_argument('-kafka_host', type=str, help='Kafka host', required=True)
+parser.add_argument('-kafka_port', type=str, help='Kafka port', required=True)
+
+args = parser.parse_args()
+if args.topic is None or args.kafka_host is None or args.kafka_port is None:
+  parser.print_help()
+
+
+print(args)
+
+
+class KafkaSource:
+
+  def __init__(self, host, port):
+    self.consumer = KafkaConsumer(
+      topic=args.topic,
+      enable_auto_commit=True,
+      auto_offset_reset='earliest',  # 'latest',
+      value_deserializer=lambda m: json.loads(m.decode("utf-8")),
+      group_id=self.topic,
+      bootstrap_servers=f'{host}:{port}')
+
+  def ingest(self):
+    for datum in self.source:
+      print(f"Receiived {datum}, yay")
+
+
+k = KafkaSource(args.kafka_host, args.kafka_port)
+k.ingest()
+```
 
 #### Consumer Groups
 
 Consumers work as part of a consumer group, which is one or more consumers that work together to consume a topic. The group ensures that each partition is only consumed by one member. In this way, consumers can horizontally scale to consume topics with a large number of messages. Additionally, if a single consumer fails, the remaining members of the group will reassign the partitions being consumed to take over for the missing member.
 
 ![consumer_group](./assets/consumer_group.png)
+
+```bash
+# see group offsets
+./kafka-consumer-groups.sh --bootstrap-server $BOOTSTRAP --group $GROUP --describe --offsets
+```
 
 #### Consumer behavior
 
@@ -107,6 +268,14 @@ Moving partition ownership from one consumer to another is called a rebalance. R
 One of Kafka’s unique characteristics is that it allows consumers to use Kafka to track their position (offset) in each partition. We call the action of updating the current position in the partition an offset commit Consumers commit the last message they’ve successfully processed from a partition and implicitly assume that every message before the last was also successfully processed.
 
 To maintain commit offsets, consumers send a message to Kafka, which updates a special `__consumer_offsets` topic with the committed offset for each partition. If a consumer crashes or a new consumer joins the consumer group, this will trigger a rebalance. After a rebalance, each consumer may be assigned a new set of partitions than the one it processed before. In order to know where to pick up the work, the consumer will read the latest committed offset of each partition and continue from there.
+
+```bash
+# reset or shift offsets
+./kafka-consumer-groups.sh --bootstrap-server $BOOTSTRAP --group $TOPIC --reset-offsets --to-latest
+./kafka-consumer-groups.sh --bootstrap-server $BOOTSTRAP --group $TOPIC --topic $TOPIC --execute --reset-offsets --to-earliest
+./kafka-consumer-groups.sh --bootstrap-server $BOOTSTRAP --group $TOPIC --topic $TOPIC --execute --reset-offsets --to-latest
+./kafka-consumer-groups.sh --bootstrap-server $BOOTSTRAP --group $TOPIC --topic $TOPIC --execute --reset-offsets --shift-by 60
+```
 
 ### Brokers
 

@@ -107,7 +107,7 @@ Messages in Kafka are categorized into topics. The closest analogies for a topic
 
 ```bash
 # Create a new topic
-./bin/kafka-topics.sh --create --topic $TOPIC --partitions 1 --replication-factor 1 --bootstrap-server $BOOTSTRAP
+./kafka-topics.sh --create --topic $TOPIC --partitions 1 --replication-factor 1 --bootstrap-server $BOOTSTRAP
 ```
 
 ```bash

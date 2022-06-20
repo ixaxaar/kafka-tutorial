@@ -214,11 +214,8 @@ class KafkaSource:
 
   def __init__(self, host, port):
     self.consumer = KafkaConsumer(
-      topic=args.topic,
-      enable_auto_commit=True,
-      auto_offset_reset='earliest',  # 'latest',
-      value_deserializer=lambda m: json.loads(m.decode("utf-8")),
-      group_id=self.topic,
+      args.topic,
+      auto_offset_reset='latest',  # 'latest',
       bootstrap_servers=f'{host}:{port}')
 
   def ingest(self):
